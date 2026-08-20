@@ -1,5 +1,19 @@
 # Agent Workflows
 
+> [!WARNING]
+> **This document has drifted from the current codebase** (v1.6.0, TypeScript + ESM).
+> - The `src/teams/runtime` module (`createTeamRuntime`) shown below **no longer
+>   exists**. Multi-agent collaboration now lives in `src/swarm/` (in-process and
+>   subprocess backends, mailbox, team lifecycle, worktrees).
+> - The `require(...)` snippets are CommonJS; the repo is now ESM + TypeScript.
+>   Import from the package entry (`src/index.ts`, namespaces `engine`, `tools`,
+>   `api`, `config`, `skills`, `memory`, `commands`, `swarm`, …) or run via `tsx`.
+> - The `.js` example files in this directory are kept for pattern reference and
+>   will not run as-is.
+>
+> Treat the six patterns below as conceptual guidance; verify API details against
+> `src/swarm/` and `src/index.ts` before writing code.
+
 HaxAgent supports composing multiple specialized agents into **teams** that
 collaborate on complex coding tasks.  Each agent has a distinct role, a
 scoped set of tools, and a natural-language prompt that guides its behavior.

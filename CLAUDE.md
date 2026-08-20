@@ -2,246 +2,272 @@
 
 ## Project Overview
 
-HaxAgent is a professional AI coding assistant with a Claude-like CLI experience. It supports 12+ LLM providers (Anthropic, OpenAI, DeepSeek, Groq, Mistral, Google, Moonshot, Zhipu, DashScope, Ollama, vLLM, OpenRouter), agent teams, plugins, skills, session memory, and a desktop UI. **Architecture: Fully refactored following the OpenHarness reference architecture and industry-grade standards.** Rebuilt from flat directory (~560 files) into layered modular design: `core/` (typed protocols) → `engine/` (agent runtime) → `api/`/`tools/`/`services/` (implementations). 229 OpenHarness Python modules ported to 144 consolidated JS modules with full feature parity.
+HaxAgent is a professional AI coding assistant with a Claude-like CLI experience. It supports 12+ LLM providers (Anthropic, OpenAI, DeepSeek, Groq, Mistral, Google, Moonshot, Zhipu, DashScope, Ollama, vLLM, OpenRouter), agent teams, plugins, skills, session memory, and a desktop UI.
 
-- **Language:** Node.js (>= 18), JavaScript (CommonJS)
-- **Entry point (CLI):** `src/cli.js` (bin: `hax-agent`)
-- **Entry point (library):** `src/index.js` (main: `hax-agent-cli`)
-- **Desktop UI:** Vue 3 + Electron under `desktop/`
-- **Tests:** Node.js built-in test runner (`node --test`)
-- **Dependencies:** `@anthropic-ai/sdk`, `openai`, `@google/generative-ai`, `markdown-it`, `dompurify`
+The codebase is **TypeScript + ESM** (`"type": "module"`, module resolution `NodeNext`, target ES2022). All relative imports must carry the `.js` extension (the source file is `.ts`, but the specifier refers to the compiled output). The interactive default interface is an **Ink TUI** (`src/tui-ink/`); the classic readline interface remains available via `--legacy`.
+
+- **Language:** TypeScript (strict), ESM, Node.js >= 18
+- **Entry point (CLI):** `src/cli.ts` (bin: `hax-agent` → `dist/cli.js`)
+- **Entry point (library):** `src/index.ts` (main: `hax-agent-cli` → `dist/index.js`)
+- **Desktop UI:** Electron + Vue 3 under `desktop/`
+- **Tests:** Node.js built-in test runner (`node --test`) executed through `tsx`
+- **Runtime deps:** `@anthropic-ai/sdk`, `openai`, `@google/generative-ai`, `ink`, `react`, `ink-text-input`, `markdown-it`, `dompurify`
 
 ## Quick Start
 
 ```bash
-# Install
-npm install
+npm install            # install dependencies
+npm run dev            # run the CLI from source (tsx src/cli.ts)
+npm run build          # compile TypeScript to dist/ (tsc)
+npm start              # run the compiled dist/cli.js
+npm run typecheck      # tsc --noEmit (this is also what `npm run lint` runs today)
+npm test               # run the test suite
 
-# Run the CLI (interactive shell)
-npm start
-
-# Run all tests
-npm test
-
-# Run specific tests
-node --test test/cli.test.js
-
-# Lint
-npm run lint
-
-# Desktop development
-npm run desktop:dev      # Start dev server
-npm run desktop:build    # Build for production
+npm run desktop:dev    # desktop development mode
+npm run desktop:build  # build desktop frontend assets
 ```
+
+Before committing, `npm run typecheck` and `npm test` must both pass.
 
 ## Architecture & Data Flow
 
 ```
-User input (stdin)
-  -> cli.js                                  -- parse commands, manage readline
-    -> commands/registry.js                  -- route slash commands and chat messages
-      -> engine/agent.js (AgentEngine)       -- core agent loop: prompt, tool use, streaming
-        -> api/provider.js                   -- LLM API calls (12+ providers)
-        -> engine/query.js (QueryContext)    -- state tracking, compaction, offloading
-        -> core/permissions/checker.js       -- tool permission evaluation
-      -> tui/index.js (TUI)                  -- terminal rendering
-    -> stdout (rendered output)
+User input
+  -> src/cli.ts                         -- arg parsing; dispatch Ink TUI or readline
+    -> src/tui-ink/run.tsx              -- default: render <App/>, wire approval bridge
+      -> src/tui-ink/App.tsx            -- handleSubmit -> engine.sendMessage()
+        -> src/engine/agent.ts          -- AgentEngine: prompt build, tool loop
+          -> src/api/provider.ts        -- LLM streaming (12+ providers, withRetry)
+          -> src/tools/registry.ts      -- tool execution + permission checks
+          -> src/core/permissions/      -- permission evaluation
+        <- typed events (async generator): message.delta / tool.start /
+           tool.result / turn.completed / turn.failed ...
+      -> src/tui-ink/reducer.ts         -- events -> UI state
+      -> terminal rendering (Static history + live area)
 ```
 
-**Key data flow for a user message:**
-1. `cli.js` readline captures input -> slash command or chat message
-2. `commands/registry.js` routes to handler -> `engine.sendMessage()`
-3. `engine/agent.js` builds system prompt (skills + context + history) and runs tool loop
-4. `api/provider.js` sends prompt to LLM -> streams response tokens
-5. Agent engine parses tool calls from response -> executes via `tools/registry.js`
-6. Tool results fed back to provider -> loop until no more tool calls
-7. `tui/index.js` renders events to terminal
+Key points for a user message:
+
+1. `cli.ts` parses flags and starts the Ink TUI (default) or the legacy readline loop.
+2. Slash commands route through `src/commands/registry.ts` and `src/commands/extended-commands.ts` (~55 commands); plain messages go to `engine.sendMessage()`.
+3. `AgentEngine` assembles the system prompt (skills + context + history) and runs the tool loop.
+4. `api/provider.ts` streams LLM responses; Anthropic tool names with dots are sanitized for the API.
+5. Tool calls execute via `tools/registry.ts` after permission checks; results feed back into the conversation until the model stops calling tools.
+6. The engine yields typed events; the Ink reducer consumes them for incremental rendering. The desktop app forwards the same event stream over Electron IPC.
+
+The approval bridge between engine and TUI uses a deferred-promise pattern: `run.tsx` creates the approval callback before `App` renders, `dispatchRef` exposes the reducer dispatch, and resolutions are applied via `setImmediate` with a one-shot `resolvedRef` guard. Preserve this contract when touching approval code.
 
 ## Directory Structure
 
 ```
 src/
-├── index.js                    # Library entry — exports engine, tools, api, config, skills, memory, tui, commands
-├── cli.js                      # CLI entry: argument parsing, readline loop, session wiring
-├── api/
-│   ├── provider.js             # 12+ provider clients (Anthropic, OpenAI, DeepSeek, Groq, Mistral, Google, Moonshot, Zhipu, DashScope, Ollama, vLLM, OpenRouter)
-│   └── retry.js                # Retry logic with exponential backoff
-├── commands/
-│   ├── registry.js             # Slash command registry (~30 commands)
-│   └── extended-commands.js    # Extended command set
-├── config/
-│   ├── settings.js             # Settings management (~/.haxagent/settings.json)
-│   └── profiles.js             # Provider profiles (claude, gpt, sonnet, haiku, local, etc.)
-├── core/                       # Foundation layer — typed, protocol-driven
-│   ├── index.js                # Core module exports
-│   ├── api/
-│   │   ├── errors.js           # API error classification (CONTEXT_TOO_LONG, RATE_LIMITED, etc.)
-│   │   └── provider-adapter.js # Provider adapter protocol (ApiStreamEvent types, ProviderAdapter base class)
-│   ├── memory/
-│   │   └── compaction.js       # Token estimation and compaction utilities
-│   ├── messages/
-│   │   └── types.js            # StandardMessage, ContentBlock types, stream events, token estimation
-│   └── permissions/
-│       └── checker.js          # PermissionChecker, PermissionMode, sensitive path patterns
-├── engine/                     # Agent runtime
-│   ├── agent.js                # AgentEngine, Session, HookExecutor, PermissionChecker, HookEvent
-│   └── query.js                # QueryContext: task focus, file tracking, skill tracking, output offloading, tool context
-├── hooks/
-│   └── registry.js             # Hook registry for lifecycle events
-├── memory/
-│   ├── compact.js              # Message micro-compaction and token estimation
-│   └── store.js                # Persistent memory store (CRUD, search)
-├── plugins/
-│   ├── installer.js            # Plugin installer
-│   ├── registry.js             # Plugin auto-discovery and lifecycle hooks
-│   └── schema.js               # Plugin manifest schema validation
-├── prompts/
-│   └── manager.js              # System prompt assembly and management
-├── services/                   # Auxiliary services
-│   ├── autodream.js            # AutoDream — automated goal continuation
-│   ├── lsp.js                  # LSP-like code navigation (go-to-def, workspace search)
-│   ├── mcp.js                  # MCP (Model Context Protocol) server integration
-│   ├── memory-extract.js       # Memory extraction from conversation
-│   ├── personalization.js      # Environment fact extraction and rules.md generation
-│   └── session-memory.js       # Session memory persistence
-├── shared/
-│   ├── themes.js               # Terminal color themes
-│   └── utils.js                # ANSI escape codes, styled() output helper, THEME constants
-├── skills/
-│   └── registry.js             # Skill auto-discovery, loading, and system prompt generation
+├── cli.ts                        # CLI entry: arg parsing, Ink/readline dispatch
+├── index.ts                      # Library barrel: nested default export (api.engine.Session, api.tools.ToolRegistry, ...)
+├── context.ts, session.ts, setup.ts, platforms.ts, pricing.ts
+├── renderer*.ts                  # readline-era renderers (used by --legacy path)
+├── tui-ink/                      # Ink TUI (default interface)
+│   ├── App.tsx                   # root component, three-part layout + <Static>
+│   ├── run.tsx                   # bootstrap: engine wiring, approval bridge
+│   ├── reducer.ts                # state machine (engine events + UI actions)
+│   ├── types.ts                  # AppState, actions, CommittedTurn
+│   ├── keybindings.tsx           # key handling (incl. Ctrl+R detail toggle)
+│   ├── markdown.ts               # markdown -> ink elements
+│   ├── completions.ts            # slash command completion
+│   ├── components/               # ToolCall, ToolList, DiffView, CommandPalette,
+│   │                             # ApprovalPrompt, StatusBar, ConversationTurn,
+│   │                             # ThinkingBlock, TextStream, SpinnerLine, UserInput
+│   └── ui/                       # primitives: Select (+select-state), Separator, useTerminalSize
+├── core/                         # Foundation layer — typed protocols (no deps upward)
+│   ├── api/                      # errors.ts (error classification), provider-adapter.ts (ApiStreamEvent, adapters)
+│   ├── messages/                 # StandardMessage, ContentBlock discriminated union
+│   ├── memory/                   # compaction utilities
+│   └── permissions/              # PermissionChecker, modes, sensitive paths
+├── engine/                       # Agent runtime
+│   ├── agent.ts                  # AgentEngine, Session, HookExecutor, PermissionChecker
+│   ├── query.ts                  # QueryContext: task focus, file tracking, maxTurns (default 200)
+│   ├── cost-tracker.ts           # token/cost accounting
+│   └── stream-events.ts          # event type definitions
+├── api/                          # Provider layer
+│   ├── provider.ts               # REGISTRY (12+ providers), createProvider, streaming clients
+│   ├── registry.ts, retry.ts     # provider registry helpers, exponential backoff with Retry-After
+│   └── codex-client.ts, copilot-client.ts, copilot-auth.ts, usage.ts
 ├── tools/
-│   ├── registry.js             # Tool registry: 10 built-in tools (file.*, shell.run, web.*)
-│   ├── agent-tool.js           # Agent subprocess tool
-│   ├── extended.js             # Extended tool set
-│   ├── image-tools.js          # Image processing tools
-│   ├── mcp-tools.js            # MCP tool integration
-│   ├── plan-mode-tool.js       # Plan mode tool (EnterPlanMode/ExitPlanMode)
-│   ├── send-message-tool.js    # Inter-agent message tool
-│   └── worktree-tool.js        # Git worktree management tool
-└── tui/
-    └── index.js                # Terminal UI: alt-screen, event rendering, status bar, approval prompts
+│   ├── registry.ts               # ToolRegistry + 9 core tools (file.*, shell.run, web.*)
+│   ├── extended.ts               # extended tool set (agent, task.*, team.*, cron.*, todo_write, ...)
+│   ├── agent-tool.ts             # subagent delegation
+│   ├── mcp-tools.ts              # list/read MCP resources and tools
+│   ├── plan-mode-tool.ts, worktree-tool.ts, send-message-tool.ts, remote-trigger-tool.ts, image-tools.ts
+├── commands/
+│   ├── registry.ts               # ~37 core slash commands
+│   └── extended-commands.ts      # ~18 extended commands (/session, /mcp, /plugin, /diff, ...)
+├── config/
+│   ├── settings.ts               # defaults + ~/.haxagent/settings.json merge
+│   ├── profiles.ts               # ProfileManager, builtin profiles
+│   └── paths.ts                  # all data directory resolution (HAXAGENT_* env overrides)
+├── skills/                       # SKILL.md discovery, frontmatter parsing, prompt generation
+├── plugins/                      # plugin.json manifest validation, registry, installer
+├── hooks/                        # hook registry: command/http/prompt/agent hook types, hot-reload
+├── memory/                       # persistent memory store, compaction, relevance ranking, scan, team memory
+├── prompts/                      # system prompt assembly (skills, context, environment)
+├── services/                     # lsp, mcp (+mcp-bootstrap), cron, session-storage, session-memory,
+│                                 # token-estimation, memory-extract, personalization, autodream
+├── sandbox/                      # docker / bwrap / macOS / Windows backends, session, path-validator
+├── swarm/                        # multi-agent: registry, in-process + subprocess backends, mailbox, worktree
+├── channels/                     # IM channel adapters (feishu, slack, discord, telegram, dingtalk, email,
+│                                 # matrix, mochat, qq, wechat, whatsapp) + bus
+├── tasks/                        # background task manager, local agent task, stop-task
+├── auth/                         # auth manager, flows, storage, external
+├── keybindings/                  # default bindings, loader, parser, resolver
+├── autopilot/ bridge/ coordinator/ personalization/ output-styles/ state/ vim/ voice/
+└── shared/                       # themes.ts, utils.ts (ANSI, styled())
 
-desktop/                         # Electron + Vue 3 desktop application
-├── main/                       # Electron main process
-├── preload/                    # Preload scripts
-└── renderer/                   # Vue 3 frontend (Vite)
-test/                           # Test suite
-scripts/                        # Build, lint, and test scripts
-docs/plans/                     # Architecture and design plans
+desktop/                          # Electron + Vue 3 app
+├── main/index.js                 # main process: IPC handlers (agent:sendMessage, approval:request/respond)
+├── preload/index.js              # contextBridge exposing window.haxAgent
+└── renderer/                     # Vue 3 + Vite frontend (App.vue, components/, composables/)
+
+test/                             # node:test files (must be listed in scripts/run-tests.js)
+test-helpers/                     # assertions, fixtures, mocks, temp dirs
+scripts/                          # run-tests.js, dev/build/start helpers for desktop
+docs/plans/, docs/superpowers/    # dated design documents and specs (historical records)
 ```
 
 ## Core Module Responsibilities
 
 | Module | Responsibility |
 |--------|---------------|
-| `api/provider.js` | Provider clients with unified streaming interface, provider registry (12+ providers) |
-| `core/api/provider-adapter.js` | Typed provider adapter protocol: ApiStreamEvent types, AnthropicAdapter, OpenAIAdapter, factory |
-| `core/messages/types.js` | StandardMessage class, ContentBlock discriminated union, token estimation, format conversion |
-| `core/permissions/checker.js` | PermissionChecker with mode (normal/yolo/plan/fullauto), always-allow/deny sets, sensitive path detection |
-| `engine/agent.js` | AgentEngine with async generator tool loop, Session, HookExecutor, HookEvent lifecycle |
-| `engine/query.js` | QueryContext for state tracking: task focus, read files, skills, work log, verified work |
-| `config/settings.js` | Settings load/save from `~/.haxagent/settings.json` with defaults merging |
-| `config/profiles.js` | ProfileManager: built-in + custom provider profiles with switching |
-| `commands/registry.js` | ~30 slash commands: help, model, provider, skills, goal, yolo, plan, perms, lsp, cost, export, etc. |
-| `tools/registry.js` | ToolRegistry with 10 built-in tools, isReadOnly classification, path sandboxing |
-| `tui/index.js` | Terminal UI with alt-screen buffer, event-driven rendering, approval prompts, status bar |
-| `skills/registry.js` | Skill discovery from `.hax-agent/skills/`, system prompt generation |
-| `services/lsp.js` | Code navigation: go-to-definition, workspace symbol search |
-| `services/personalization.js` | Environment fact extraction, rules.md generation |
-| `memory/store.js` | Persistent memory CRUD with search |
-| `memory/compact.js` | Message compaction with token-aware truncation |
+| `src/engine/agent.ts` | AgentEngine async-generator tool loop, Session state, HookExecutor lifecycle dispatch, approval prompts |
+| `src/engine/query.ts` | QueryContext: task focus, read files, skills invoked, work log, maxTurns (default 200) |
+| `src/api/provider.ts` | Unified streaming provider clients; `REGISTRY` maps provider names to class + env key + default model; `createProvider` factory |
+| `src/api/retry.ts` | `withRetry`: retryable status codes/messages, Retry-After parsing, exponential backoff with jitter |
+| `src/core/api/provider-adapter.ts` | Typed adapter protocol (`ApiStreamEvent`), Anthropic/OpenAI adapters |
+| `src/core/messages/types.ts` | StandardMessage, ContentBlock discriminated union, token estimation |
+| `src/core/permissions/checker.ts` | PermissionChecker: normal/yolo/plan/full_auto, always-allow/deny sets, sensitive path detection |
+| `src/tools/registry.ts` | ToolRegistry: 9 core tools, `isReadOnly` classification, workspace path sandboxing |
+| `src/commands/registry.ts` + `extended-commands.ts` | ~55 slash commands: `register(name, handler, description)` |
+| `src/tui-ink/reducer.ts` | Pure state machine: engine events and UI actions -> AppState |
+| `src/config/settings.ts` | Defaults deep-merged with `~/.haxagent/settings.json` (cached; `reloadSettings` busts cache) |
+| `src/config/paths.ts` | All directory resolution: `~/.haxagent/` base, `data/`, `logs/`, project `.hax-agent/`; `HAXAGENT_CONFIG_DIR` / `HAXAGENT_DATA_DIR` / `HAXAGENT_LOGS_DIR` overrides |
+| `src/memory/store.ts` | MemoryStore (Markdown memories + MEMORY.md index, signature dedup, TTL) and SessionMemoryStore (`~/.haxagent/sessions/` JSON snapshots) |
+| `src/memory/compact.ts` | Micro-compaction (old tool results) and full LLM summarization; CompactionManager |
+| `src/services/lsp.ts` | Symbol extraction for JS/TS/Python, go-to-definition, find-references, workspace search |
+| `src/services/mcp.ts` | MCP client manager: stdio/http/ws transports, tool discovery, JSON config |
+| `src/skills/registry.ts` | SKILL.md frontmatter parsing, user + project discovery, `<available_skills>` prompt block |
 
 ## Module Organization Principles
 
-1. **Layered architecture.** `core/` (protocols, types) → `engine/` (runtime) → `api/`/`tools/`/`services/` (implementations). Dependencies flow downward.
-2. **Provider-agnostic engine.** The AgentEngine works with any provider via the common streaming interface in `core/api/provider-adapter.js`.
+1. **Layered architecture.** `core/` (protocols, types) → `engine/` (runtime) → `api/` / `tools/` / `services/` (implementations). Dependencies flow downward only.
+2. **Provider-agnostic engine.** AgentEngine works with any provider through the streaming interface; provider specifics live in `api/`.
 3. **Tools are self-describing.** Each tool registers `{ name, description, inputSchema, execute, isReadOnly }`. The schema is sent to the LLM for function calling.
-4. **Event-driven streaming.** The agent loop uses async generators yielding typed events (`message.delta`, `tool.start`, `tool.result`, `turn.completed`). The TUI consumes these events.
-5. **Hooks for lifecycle extension.** HookExecutor supports: `session.start`, `session.end`, `pre.compact`, `post.compact`, `pre.tool_use`, `post.tool_use`, `user.prompt_submit`, `notification`, `stop`, `subagent.stop`.
-6. **Permission modes.** Four modes: `normal` (ask), `yolo` (auto-approve all), `plan` (block mutating tools), `fullauto` (silent auto-approve). Plus per-tool always-allow/always-deny sets.
+4. **Event-driven streaming.** The engine loop is an async generator yielding typed events; the Ink reducer and the desktop IPC bridge both consume the same stream.
+5. **Hooks for lifecycle extension.** HookExecutor dispatches: `session.start`, `session.end`, `pre.compact`, `post.compact`, `pre.tool_use`, `post.tool_use`, `user.prompt_submit`, `notification`, `stop`, `subagent.stop`.
+6. **Permission modes.** `normal` (ask), `yolo` (auto-approve), `plan` (block mutating tools), `full_auto` (silent auto-approve), plus per-tool always-allow/always-deny sets.
+7. **Tool output offloading.** Large tool outputs (>8000 chars) are written to disk with inline previews to avoid context bloat.
+8. **ESM everywhere.** Relative imports require the `.js` extension. `__dirname` is `import.meta.dirname`. JSON is read with `fs` or imported with `with { type: "json" }`.
 
 ## How to Add a New Feature
 
 ### Add a Slash Command
 
-1. In `src/commands/registry.js`, call `register("commandname", handler, "Description")`.
-2. The handler receives `(args, ctx)` where `ctx` has `{ screen, session, rl, settings }`.
-3. Use `ctx.screen.write()` for output and `ctx.rl.prompt()` to re-display the prompt.
+In `src/commands/registry.ts` (or `extended-commands.ts` for extended set):
+
+```ts
+register("commandname", (args, ctx) => {
+  // args: string[]  —  ctx: { screen, session, rl, settings, engine, ... }
+  ctx.screen.write("output\n");
+  ctx.rl?.prompt?.();
+}, "One-line description shown in /help");
+```
 
 ### Add a Tool
 
-1. Add the tool definition to the `tools` object in `src/tools/registry.js`:
-   ```js
-   "tool.name": {
-     name: "tool.name", description: "...",
-     inputSchema: { type: "object", required: [...], properties: {...} },
-     async execute(args, ctx) { ... return { ok: true, data: {...} }; },
-     isReadOnly: (args) => true/false,
-   }
-   ```
-2. It will be auto-registered by `createDefaultRegistry()`.
+Add the tool definition to `src/tools/registry.ts` (core) or `src/tools/extended.ts` (extended set):
+
+```ts
+const myTool: ToolDefinition = {
+  name: "tool.name",
+  description: "What it does",
+  inputSchema: { type: "object", required: ["path"], properties: { path: { type: "string" } } },
+  async execute(args, ctx) {
+    // return { ok: true, data: {...} } or { ok: false, error: { code, message } }
+  },
+  isReadOnly: (args) => true,
+};
+```
+
+Tools in `extended.ts` are merged automatically by `createDefaultRegistry()`.
 
 ### Add a Provider
 
-1. Add an entry to the `REGISTRY` object in `src/api/provider.js`:
-   ```js
-   providername: { cls: BaseOpenAICompatible, envKey: "PROVIDER_API_KEY", url: "https://...", model: "...", name: "providername" }
-   ```
-2. For non-OpenAI-compatible APIs, create a new class implementing the `stream()` async generator method.
+Add an entry to the `REGISTRY` object in `src/api/provider.ts`:
 
-### Add a Plugin
+```ts
+providername: { cls: BaseOpenAICompatible, envKey: "PROVIDER_API_KEY", url: "https://api.example.com/v1", model: "default-model", name: "providername" },
+```
 
-1. Create a plugin directory with a manifest in `~/.haxagent/plugins/` or `<project>/.hax-agent/plugins/`.
-2. Plugins register hooks on lifecycle events. See `HookEvent` in `engine/agent.js` for available events.
+For non-OpenAI-compatible APIs, implement a class with an async-generator `stream()` method following `AnthropicProvider`. Consider adding a matching profile in `src/config/profiles.ts`.
 
 ### Add a Skill
 
-1. Create a `SKILL.md` file with YAML frontmatter (`name`, `description`, `triggers`) and markdown body.
-2. Place it in `~/.haxagent/skills/<name>/` or `<project>/.hax-agent/skills/<name>/`.
-3. Skills are auto-discovered by `loadSkillRegistry()`.
+Create `~/.haxagent/skills/<name>/SKILL.md` or `<project>/.hax-agent/skills/<name>/SKILL.md` with YAML frontmatter (`name`, `description`, `when_to_use`, optional `allowed-tools`, `arguments`). Discovery is automatic.
+
+### Add a Plugin
+
+Create a plugin directory with a `plugin.json` manifest under `~/.haxagent/plugins/` or `<project>/.hax-agent/plugins/`. Plugins register hooks on lifecycle events; see `src/hooks/registry.ts` for hook types (command/http/prompt/agent).
 
 ## Coding Conventions
 
-- **Language:** JavaScript (CommonJS `require`/`module.exports`), strict mode.
-- **Formatting:** 2-space indentation, semicolons.
-- **Naming:** camelCase for functions/variables, PascalCase for classes/constructors, UPPER_SNAKE for constants.
-- **Error handling:** Use try/catch for async operations. Tool errors return `{ ok: false, error: { code, message } }`.
-- **JSDoc:** Document public APIs with `@param`, `@returns`, `@throws`. Explain WHY, not WHAT.
-- **Imports:** Group in order: Node built-ins, npm packages, local modules. Use destructuring for named imports.
+- **Language:** TypeScript, strict mode, ESM with NodeNext resolution. Relative imports must end with `.js`.
+- **Formatting:** 2-space indentation, semicolons, double quotes (match existing files).
+- **Naming:** camelCase for functions/variables, PascalCase for classes/components, UPPER_SNAKE for constants.
+- **Error handling:** try/catch for async operations. Tool errors return `{ ok: false, error: { code, message } }`; never throw across the engine boundary.
+- **JSDoc:** document public APIs with `@param` / `@returns` / `@throws`; explain why, not what.
+- **Imports:** order Node built-ins → npm packages → local modules; use destructuring for named imports.
+- **Ink components:** use native ink elements (`<Box>`, `<Text color>`) — do not introduce ANSI-passthrough rendering. New interactive primitives belong in `src/tui-ink/ui/`.
 
 ## Testing Conventions
 
-- **Framework:** Node.js built-in test runner (`node --test`).
-- **File naming:** `test/<module>.test.js` mirrors `src/<module>.js`.
-- **Run all tests:** `npm test`
-- **Run specific tests:** `node --test test/cli.test.js` or `node --test "test/**/config*.test.js"`
+- **Framework:** Node.js built-in test runner (`node:test`, `node:assert/strict`).
+- **Runner:** `npm test` executes `scripts/run-tests.js`, which spawns `node --import tsx --test <files>` with a hard-coded file list, a 15s per-test timeout (Node >= 20.10), and a 300s global timeout.
+- **Critical gotcha:** a new test file is NOT picked up automatically — add its path to the list in `scripts/run-tests.js` or it will never run.
+- **File naming:** `test/<module>.test.ts` mirrors `src/<module>.ts`.
+- **Run a single file:** `node --import tsx --test test/tui-ink-reducer.test.ts`
+- **Helpers:** `test-helpers/` provides assertions, fixtures, mocks, and temp directory utilities.
+- **Ink tests:** reducer and pure-logic tests run headless (see `tui-ink-reducer.test.ts`, `tui-ink-select-state.test.ts`); interactive rendering is verified via the preview harnesses (`src/tui-ink/*-preview.tsx`) and manual TTY checks.
 
 ## Key Design Patterns
 
-1. **Layered Architecture:** `core/` (types, protocols) → `engine/` (runtime) → `api/`/`tools/`/`services/` (implementations). Each layer only depends on the layer below.
-2. **Async Generator Streaming:** AgentEngine uses `async *sendMessage()` yielding typed events consumed by the TUI for incremental rendering.
-3. **Hook System (Observer Pattern):** HookExecutor dispatches lifecycle events to registered handlers with fnmatch-style tool name matching.
-4. **Strategy Pattern:** Provider adapters implement a common streaming interface so the engine is provider-agnostic.
-5. **Factory Functions:** `createProvider()`, `createDefaultRegistry()`, `loadSkillRegistry()` — dependency injection without DI frameworks.
-6. **Composite Config:** Settings merge defaults → user config file → environment variables → runtime overrides.
-7. **QueryContext (State Tracking):** A single context object tracks task focus, read files, invoked skills, work log, and verified work across a query.
-8. **Tool Output Offloading:** Large tool outputs (>8000 chars) are written to disk files with inline previews to avoid context bloat.
+1. **Async generator streaming:** `AgentEngine.sendMessage()` yields typed events consumed by the TUI for incremental rendering.
+2. **Reducer state machine:** `tui-ink/reducer.ts` is pure — engine events and UI actions are the only inputs; this keeps rendering testable.
+3. **Hook system (observer):** HookExecutor dispatches lifecycle events with fnmatch-style tool name matching.
+4. **Strategy for providers:** adapters implement a common streaming interface so the engine stays provider-agnostic.
+5. **Factory functions:** `createProvider()`, `createDefaultRegistry()`, `loadSkillRegistry()` — dependency injection without DI frameworks.
+6. **Composite config:** defaults → user file → environment variables → runtime overrides (persisted on slash command changes).
 
 ## Common Development Tasks
 
 ```bash
 # After editing the agent engine:
-node --test test/agent-engine.test.js
+node --import tsx --test test/engine-system-prompt.test.ts test/engine-tool-result.test.ts
 
-# After editing a tool in tools/registry.js:
-node --test test/tools/
-
-# After editing CLI commands:
-node --test test/cli.test.js test/cli-commands.test.js
+# After editing TUI state/components:
+node --import tsx --test test/tui-ink-reducer.test.ts test/tui-ink-reducer-redesign.test.ts
 
 # After editing the provider layer:
-node --test test/providers/
+node --import tsx --test test/anthropic-provider.test.ts test/anthropic-tool-names.test.ts
 
-# Full test suite before pushing:
-npm test
+# After editing permissions:
+node --import tsx --test test/permissions-checker.test.ts
+
+# Full suite before pushing:
+npm run typecheck && npm test
 ```
+
+## Known Gaps (as of v1.6.0)
+
+- `npm run lint` currently aliases `tsc --noEmit`; ESLint is configured (`.eslintrc.json`) but not wired up.
+- `npm run test:desktop` points at a `test/desktop/` directory that does not exist yet.
+- Test coverage is concentrated in core/engine/api/TUI modules; tools, memory, skills, plugins, channels, and sandbox have no tests.
+- CI runs on Node 18/ubuntu only and marks both test steps `continue-on-error: true` (failures do not fail the build).
+- `examples/` still references the pre-1.5 `src/hub` API, which was removed in the architecture rewrite; example code does not run.
+- Improvement roadmap: `docs/superpowers/specs/2026-08-21-v1.7-quality-and-features-spec.md`.

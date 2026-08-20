@@ -1,5 +1,22 @@
 # HaxAgent Plugins
 
+> [!WARNING]
+> **Parts of this document have drifted from the current codebase** (v1.6.0, TypeScript + ESM).
+> - The repo is now ESM — `require('./src/plugins')` does not work. Import from
+>   the package entry (`src/index.ts`) or the compiled `dist/` output instead.
+> - **Hook names have changed.** The camelCase hooks documented below
+>   (`beforeToolCall`, `afterChat`, `onError`, …) were replaced by 10 lifecycle
+>   events in `src/hooks/registry.ts`: `session.start`, `session.end`,
+>   `pre.compact`, `post.compact`, `pre.tool_use`, `post.tool_use`,
+>   `user.prompt_submit`, `notification`, `stop`, `subagent.stop`.
+> - Hooks now come in 4 types — `command` (shell), `http` (POST), `prompt` (LLM
+>   check), `agent` (deep verification) — and plugins may contribute tools,
+>   skills, commands, hooks, or providers (see `src/plugins/types.ts`).
+>
+> The example plugin files in this directory still use the old hook shape and
+> are kept for reference only. Verify against `src/hooks/` and `src/plugins/`
+> before writing new plugins.
+
 Plugins let you extend HaxAgent's behavior by hooking into its lifecycle.
 Each plugin is a **CommonJS module** that exports an object describing which
 events it cares about and what to do when those events fire.
