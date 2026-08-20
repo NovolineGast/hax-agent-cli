@@ -9,6 +9,13 @@
  *   - Proper cleanup
  *
  * Run:  node examples/hub-usage.js
+ *
+ * ⚠️  DRIFT WARNING (v1.6.0): `../src/hub` was REMOVED in the layered
+ * architecture rewrite — this example no longer runs as-is. The equivalent
+ * programmatic entry point is now the package root `src/index.ts` (default
+ * export with `engine`, `tools`, `api`, `config`, `skills`, `memory`,
+ * `commands`, `swarm`, … namespaces). The repo is also ESM + TypeScript now,
+ * so migrate to `import hax from "hax-agent"` style code.
  */
 
 "use strict";

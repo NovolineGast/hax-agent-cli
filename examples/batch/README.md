@@ -1,18 +1,36 @@
 # Batch Mode
 
+> [!WARNING]
+> **Parts of this document have drifted from the current codebase** (v1.6.0).
+> - The standalone `src/batch.js` module no longer exists; batch mode is now
+>   implemented directly in `src/cli.ts` (`runBatch`).
+> - **Stdin piping is no longer supported.** `--batch` takes the prompt as a
+>   CLI argument, or pairs with `--input <file>`. `echo "..." | hax-agent --batch`
+>   will exit with an error asking for a prompt string or `--input`.
+> - The multi-turn markers (`---multi---` / `@@@multi@@@`) described below are
+>   **not handled** by the current implementation — the whole input is sent as a
+>   single turn.
+>
+> Verified current usage:
+>
+> ```bash
+> hax-agent --batch "explain this code"      # prompt as argument
+> hax-agent --batch --input task.txt         # prompt from file
+> ```
+
 Batch mode lets you run HaxAgent non-interactively from scripts, CI pipelines, and automated workflows.
 
 ## Quick start
 
 ```bash
-# Pipe a single prompt
-echo "Explain the src/batch.js file" | hax-agent --batch
+# Pass a single prompt as an argument (stdin piping is NOT supported)
+hax-agent --batch "Explain the src/cli.ts file"
 
-# Read prompts from a file
+# Read the prompt from a file
 hax-agent --batch --input example-prompts.txt --output result.md
 
 # Choose a different model
-cat tasks.txt | hax-agent --batch --model claude-sonnet-4-20250514
+hax-agent --batch --input tasks.txt --model claude-sonnet-4-20250514
 ```
 
 ## CLI flags

@@ -1,5 +1,26 @@
 # Memory System
 
+> [!WARNING]
+> **This document describes the OLD memory system and has drifted significantly**
+> from the current codebase (v1.6.0). The memory subsystem was rewritten
+> (see `src/memory/store.ts`, ported from OpenHarness):
+> - **Storage location:** memories are now Markdown files (`.md`) under
+>   `~/.haxagent/memories/` (user home), **not** JSON files in a per-project
+>   `.haxagent/memories/` directory. A `MEMORY.md` index is maintained
+>   automatically.
+> - **Record model:** the namespace/tag JSON records below were replaced by
+>   entries with `title`, `content`, `category`, `scope`, `importance`, `tags`,
+>   plus signature-based dedup and TTL expiry.
+> - **Programmatic API:** the free functions (`writeMemory`, `readMemory`,
+>   `listMemories`, `deleteMemory`, `searchMemories`) were replaced by the
+>   `MemoryStore` class — `save(title, content, opts)`, `search(query, limit)`,
+>   `list(opts)`, `delete(id)` — and `require()` imports no longer work in this
+>   ESM repo.
+>
+> The CLI command and best-practice guidance below may still partially apply,
+> but verify every command against the current `/memory` implementation before
+> relying on it.
+
 HaxAgent's memory system persists key-value records to disk, with **namespace** and **tag** support for organizing knowledge across projects and contexts.
 
 ---
